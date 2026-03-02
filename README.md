@@ -152,3 +152,109 @@ k8s-worker-2    Ready    <none>          5m    v1.33.x
 
 ## 📄 License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+This repository documents the implementation of Phase 2 of the infrastructure rollout: Exposing microservices publicly using an NGINX Ingress Controller on AWS EC2. This architecture bypasses the need for MetalLB or the AWS LoadBalancer service type, utilizing a cost-effective NodePort strategy with automated TLS termination.
+
+🏗️ Architecture Flow
+The traffic flow bypasses cloud-native load balancers to reduce costs and complexity in specialized environments:
+
+graph LR
+    A[User Browser] -->|HTTPS:443| B[EC2 Public IP]
+    B -->|NodePort:30443| C[NGINX Ingress Controller]
+    C -->|Internal Routing| D[ClusterIP Service]
+    D --> E[Application Pods]
+🚀 Key Features
+Cost Optimization: Eliminates AWS ELB/ALB costs by leveraging EC2 Public IPs.
+Direct Exposure: Uses NodePort mapping for high-performance ingress routing.
+Automated TLS: Full certificate lifecycle management via cert-manager and Let's Encrypt.
+Production Ready: Includes SSL redirection and security group hardening.
+🛠️ Installation
+1. Deploy NGINX Ingress Controller
+Install the bare-metal version of the NGINX Ingress controller:
+
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.9.6/deploy/static/provider/baremetal/deploy.yaml
+2. Configure NodePort Mapping
+Patch the controller service to utilize specific static ports:
+
+kubectl patch svc ingress-nginx-controller -n ingress-nginx \
+ -p '{"spec": {"type": "NodePort", "ports": [{"name": "http", "port": 80, "nodePort": 30080}, {"name": "https", "port": 443, "nodePort": 30443}]}}'
+3. Install cert-manager
+Manage SSL/TLS certificates automatically via Helm:
+
+helm repo add jetstack https://charts.jetstack.io
+helm repo update
+
+helm install cert-manager jetstack/cert-manager \
+ --namespace cert-manager \
+ --create-namespace \
+ --set installCRDs=true
+⚙️ Configuration
+EC2 Security Group Rules
+Ensure the following ports are open on your Worker Node security groups to allow external traffic:
+
+| Protocol | Port | Description | | :--- | :--- | :--- | | TCP | 80 | HTTP Redirect (Optional) | | TCP | 443 | HTTPS Traffic | | TCP | 30080 | NGINX HTTP NodePort | | TCP | 30443 | NGINX HTTPS NodePort | | TCP | 22 | SSH Management |
+
+ClusterIssuer Setup
+Create a ClusterIssuer to communicate with Let's Encrypt:
+
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-production
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: admin@yourdomain.com
+    privateKeySecretRef:
+      name: letsencrypt-production
+    solvers:
+    - http01:
+        ingress:
+          class: nginx
+🖥️ Usage
+Deploying an Application Ingress
+To expose your service, apply the following Ingress manifest. Replace app.yourdomain.com with your actual domain.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app-ingress
+  namespace: production
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-production"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - app.yourdomain.com
+    secretName: app-tls
+  rules:
+  - host: app.yourdomain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: app-service
+            port:
+              number: 80
+🔍 Validation & Troubleshooting
+Verify the status of your deployment using the following commands:
+
+Check Ingress Status:
+
+kubectl get ingress -n production
+Verify TLS Certificate Issuance:
+
+kubectl describe certificate -n production
+Check Controller Service Ports:
+
+kubectl get svc -n ingress-nginx
+🤝 Contributing
+Fork the repository.
+Create a feature branch (git checkout -b feature/Governance).
+Commit changes (git commit -m 'Add resource limits').
+Push to the branch (git push origin feature/Governance).
+Open a Pull Request.
